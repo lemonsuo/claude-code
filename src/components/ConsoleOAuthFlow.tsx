@@ -265,6 +265,8 @@ export function ConsoleOAuthFlow({
         if (!orgResult.valid) {
           throw new Error(orgResult.message)
         }
+        // Reset modelType to anthropic when using OAuth login
+        updateSettingsForSource('userSettings', { modelType: 'anthropic' } as any)
 
         setOAuthStatus({ state: 'success' })
         void sendNotification(
@@ -455,6 +457,28 @@ function OAuthStatusMessage({
                 {
                   label: (
                     <Text>
+                      Anthropic Compatible ·{' '}
+                      <Text dimColor>Configure your own API endpoint</Text>
+                      {'\n'}
+                    </Text>
+                  ),
+                  value: 'custom_platform',
+                },
+                {
+                  label: (
+                    <Text>
+                      OpenAI Compatible ·{' '}
+                      <Text dimColor>
+                        Ollama, DeepSeek, vLLM, One API, etc.
+                      </Text>
+                      {'\n'}
+                    </Text>
+                  ),
+                  value: 'openai_chat_api',
+                },
+                {
+                  label: (
+                    <Text>
                       Claude account with subscription ·{' '}
                       <Text dimColor>Pro, Max, Team, or Enterprise</Text>
                       {process.env.USER_TYPE === 'ant' && (
@@ -482,28 +506,6 @@ function OAuthStatusMessage({
                     </Text>
                   ),
                   value: 'console',
-                },
-                {
-                  label: (
-                    <Text>
-                      Custom Platform ·{' '}
-                      <Text dimColor>Configure your own API endpoint</Text>
-                      {'\n'}
-                    </Text>
-                  ),
-                  value: 'custom_platform',
-                },
-                {
-                  label: (
-                    <Text>
-                      OpenAI Compatible ·{' '}
-                      <Text dimColor>
-                        Ollama, DeepSeek, vLLM, One API, etc.
-                      </Text>
-                      {'\n'}
-                    </Text>
-                  ),
-                  value: 'openai_chat_api',
                 },
                 {
                   label: (
@@ -742,7 +744,7 @@ function OAuthStatusMessage({
 
         return (
           <Box flexDirection="column" gap={1}>
-            <Text bold>Custom Platform Setup</Text>
+            <Text bold>Anthropic Compatible Setup</Text>
             <Box flexDirection="column" gap={1}>
               {renderRow('base_url', 'Base URL ')}
               {renderRow('api_key', 'API Key  ', { mask: true })}
