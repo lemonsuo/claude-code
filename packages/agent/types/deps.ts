@@ -47,6 +47,8 @@ export interface ProviderDep {
 export interface ToolDep {
   /** 按名称查找工具 */
   find(name: string): CoreTool | undefined
+  /** 列出所有可用工具（用于构建 API 请求的 tools 参数） */
+  list(): CoreTool[]
   /** 执行工具 */
   execute(tool: CoreTool, input: unknown, context: ToolExecContext): Promise<ToolResult>
 }
@@ -131,6 +133,86 @@ export interface SessionDep {
   getSessionId(): string
 }
 
+// --- Swarm Dep (可选，队友实例需要) ---
+
+/** 队友身份信息 */
+export interface TeammateIdentity {
+  /** 队友名称 */
+  name: string
+  /** 团队 ID */
+  teamId: string
+  /** 队友 ID */
+  teammateId: string
+  /** 角色 */
+  role: 'worker' | 'leader'
+}
+
+/** 收件箱消息 */
+export interface IncomingMailMessage {
+  /** 发送者 ID */
+  from: string
+  /** 发送者名称 */
+  fromName?: string
+  /** 消息文本 */
+  text: string
+  /** 消息摘要 */
+  summary?: string
+  /** 消息索引 */
+  index: number
+}
+
+/** 发送消息 */
+export interface OutgoingMailMessage {
+  /** 目标队友 ID（省略则广播） */
+  to?: string
+  /** 消息文本 */
+  text: string
+  /** 消息摘要 */
+  summary?: string
+}
+
+/** 队友邮箱接口 */
+export interface MailboxDep {
+  /** 轮询收件箱 */
+  poll(): Promise<IncomingMailMessage[]>
+  /** 标记已读 */
+  markRead(index: number): Promise<void>
+  /** 发送给指定队友 */
+  sendTo(peerId: string, message: OutgoingMailMessage): Promise<void>
+  /** 广播给所有队友 */
+  broadcast(message: OutgoingMailMessage): Promise<void>
+}
+
+/** 可认领任务 */
+export interface ClaimableTask {
+  /** 任务 ID */
+  taskId: string
+  /** 任务描述 */
+  description: string
+  /** 优先级 */
+  priority?: number
+}
+
+/** 队友任务认领接口 */
+export interface TaskClaimingDep {
+  /** 列出可认领的任务 */
+  listAvailable(): Promise<ClaimableTask[]>
+  /** 认领任务 */
+  claim(taskId: string): Promise<boolean>
+  /** 更新任务状态 */
+  update(taskId: string, status: string): Promise<void>
+}
+
+/** Swarm 专用依赖 — 可选，只有队友实例注入 */
+export interface SwarmDep {
+  /** 队友身份信息 */
+  identity: TeammateIdentity
+  /** 邮箱系统 */
+  mailbox: MailboxDep
+  /** 任务认领 */
+  taskClaiming: TaskClaimingDep
+}
+
 // --- AgentDeps 汇总 ---
 
 export interface AgentDeps {
@@ -150,4 +232,6 @@ export interface AgentDeps {
   context: ContextDep
   /** 会话存储 */
   session: SessionDep
+  /** Swarm 专用依赖（可选，队友实例需要） */
+  swarm?: SwarmDep
 }

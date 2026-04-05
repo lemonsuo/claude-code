@@ -118,84 +118,33 @@ import {
   getPartialCompactPrompt,
 } from './prompt.js'
 
-export const POST_COMPACT_MAX_FILES_TO_RESTORE = 5
-export const POST_COMPACT_TOKEN_BUDGET = 50_000
-export const POST_COMPACT_MAX_TOKENS_PER_FILE = 5_000
-// Skills can be large (verify=18.7KB, claude-api=20.1KB). Previously re-injected
-// unbounded on every compact → 5-10K tok/compact. Per-skill truncation beats
-// dropping — instructions at the top of a skill file are usually the critical
-// part. Budget sized to hold ~5 skills at the per-skill cap.
-export const POST_COMPACT_MAX_TOKENS_PER_SKILL = 5_000
-export const POST_COMPACT_SKILLS_TOKEN_BUDGET = 25_000
-const MAX_COMPACT_STREAMING_RETRIES = 2
+// Import from agent package (used locally and re-exported)
+import {
+  POST_COMPACT_MAX_FILES_TO_RESTORE,
+  POST_COMPACT_TOKEN_BUDGET,
+  POST_COMPACT_MAX_TOKENS_PER_FILE,
+  POST_COMPACT_MAX_TOKENS_PER_SKILL,
+  POST_COMPACT_SKILLS_TOKEN_BUDGET,
+  MAX_COMPACT_STREAMING_RETRIES,
+  stripImagesFromMessages,
+  ERROR_MESSAGE_NOT_ENOUGH_MESSAGES,
+  ERROR_MESSAGE_PROMPT_TOO_LONG,
+  ERROR_MESSAGE_USER_ABORT,
+  ERROR_MESSAGE_INCOMPLETE_RESPONSE,
+} from '../../../packages/agent/compaction/compactUtils.js'
 
-/**
- * Strip image blocks from user messages before sending for compaction.
- * Images are not needed for generating a conversation summary and can
- * cause the compaction API call itself to hit the prompt-too-long limit,
- * especially in CCD sessions where users frequently attach images.
- * Replaces image blocks with a text marker so the summary still notes
- * that an image was shared.
- *
- * Note: Only user messages contain images (either directly attached or within
- * tool_result content from tools). Assistant messages contain text, tool_use,
- * and thinking blocks but not images.
- */
-export function stripImagesFromMessages(messages: Message[]): Message[] {
-  return messages.map(message => {
-    if (message.type !== 'user') {
-      return message
-    }
-
-    const content = message.message.content
-    if (!Array.isArray(content)) {
-      return message
-    }
-
-    let hasMediaBlock = false
-    const newContent = content.flatMap(block => {
-      if (block.type === 'image') {
-        hasMediaBlock = true
-        return [{ type: 'text' as const, text: '[image]' }]
-      }
-      if (block.type === 'document') {
-        hasMediaBlock = true
-        return [{ type: 'text' as const, text: '[document]' }]
-      }
-      // Also strip images/documents nested inside tool_result content arrays
-      if (block.type === 'tool_result' && Array.isArray(block.content)) {
-        let toolHasMedia = false
-        const newToolContent = block.content.map(item => {
-          if (item.type === 'image') {
-            toolHasMedia = true
-            return { type: 'text' as const, text: '[image]' }
-          }
-          if (item.type === 'document') {
-            toolHasMedia = true
-            return { type: 'text' as const, text: '[document]' }
-          }
-          return item
-        })
-        if (toolHasMedia) {
-          hasMediaBlock = true
-          return [{ ...block, content: newToolContent }]
-        }
-      }
-      return [block]
-    })
-
-    if (!hasMediaBlock) {
-      return message
-    }
-
-    return {
-      ...message,
-      message: {
-        ...message.message,
-        content: newContent,
-      },
-    } as typeof message
-  })
+export {
+  POST_COMPACT_MAX_FILES_TO_RESTORE,
+  POST_COMPACT_TOKEN_BUDGET,
+  POST_COMPACT_MAX_TOKENS_PER_FILE,
+  POST_COMPACT_MAX_TOKENS_PER_SKILL,
+  POST_COMPACT_SKILLS_TOKEN_BUDGET,
+  MAX_COMPACT_STREAMING_RETRIES,
+  stripImagesFromMessages,
+  ERROR_MESSAGE_NOT_ENOUGH_MESSAGES,
+  ERROR_MESSAGE_PROMPT_TOO_LONG,
+  ERROR_MESSAGE_USER_ABORT,
+  ERROR_MESSAGE_INCOMPLETE_RESPONSE,
 }
 
 /**
@@ -221,8 +170,6 @@ export function stripReinjectedAttachments(messages: Message[]): Message[] {
   return messages
 }
 
-export const ERROR_MESSAGE_NOT_ENOUGH_MESSAGES =
-  'Not enough messages to compact.'
 const MAX_PTL_RETRIES = 3
 const PTL_RETRY_MARKER = '[earlier conversation truncated for compaction retry]'
 
@@ -288,12 +235,6 @@ export function truncateHeadForPTLRetry(
   }
   return sliced
 }
-
-export const ERROR_MESSAGE_PROMPT_TOO_LONG =
-  'Conversation too long. Press esc twice to go up a few messages and try again.'
-export const ERROR_MESSAGE_USER_ABORT = 'API Error: Request was aborted.'
-export const ERROR_MESSAGE_INCOMPLETE_RESPONSE =
-  'Compaction interrupted · This may be due to network issues — please try again.'
 
 export interface CompactionResult {
   boundaryMarker: SystemMessage

@@ -55,6 +55,23 @@ export class AgentLoop {
         return
       }
 
+      // --- Step 0: 邮箱轮询（仅队友实例） ---
+      if (this.deps.swarm) {
+        const inboxMessages = await this.deps.swarm.mailbox.poll()
+        if (inboxMessages.length > 0) {
+          for (const msg of inboxMessages) {
+            yield {
+              type: 'swarm_message',
+              from: msg.from,
+              fromName: msg.fromName,
+              text: msg.text,
+              summary: msg.summary,
+            }
+            messages = [...messages, this.createUserMessage(msg.text)]
+          }
+        }
+      }
+
       // --- Step 1: 构建上下文 ---
       const systemPrompt = this.deps.context.getSystemPrompt()
       const userContext = this.deps.context.getUserContext()
@@ -78,18 +95,18 @@ export class AgentLoop {
 
       let assistantMessage: CoreAssistantMessage | null = null
       let streamError: unknown = null
+      const turnState: TurnState = {
+        pendingToolUses: [],
+        textBlocks: [],
+        currentTextBlockIndex: -1,
+        thinkingBlocks: [],
+        currentThinkingBlockIndex: -1,
+        turnUsage: { input_tokens: 0, output_tokens: 0 },
+        stoppedByHook: false,
+      }
 
       try {
         const stream = this.deps.provider.stream(streamParams)
-        const turnState: TurnState = {
-          pendingToolUses: [],
-          textBlocks: [],
-          currentTextBlockIndex: -1,
-          thinkingBlocks: [],
-          currentThinkingBlockIndex: -1,
-          turnUsage: { input_tokens: 0, output_tokens: 0 },
-          stoppedByHook: false,
-        }
 
         for await (const event of stream) {
           const eventType = (event as any).type
@@ -139,8 +156,9 @@ export class AgentLoop {
 
       turnCount++
       // 兼容两种格式：扁平 CoreMessage.stop_reason 和嵌套 Message.message.stop_reason
+      // 也检查 turnState.stopReason（从流 message_delta 事件中设置）
       const rawAsst = assistantMessage as any
-      const stopReason: string | null | undefined = rawAsst?.stop_reason ?? rawAsst?.message?.stop_reason ?? null
+      const stopReason: string | null | undefined = rawAsst?.stop_reason ?? rawAsst?.message?.stop_reason ?? turnState.stopReason ?? null
       if (stopReason !== 'tool_use') {
         // LLM 决定停止 — 检查 token budget 是否需要续写
         const budgetDecision = checkTokenBudget(
@@ -161,6 +179,14 @@ export class AgentLoop {
         const hookResult = await this.deps.hooks.onStop(messages, {})
         if (hookResult.preventContinuation) {
           yield { type: 'done', reason: 'stop_hook' as DoneReason }
+          return
+        }
+
+        // 队友 idle notification（仅 swarm 队友实例）
+        if (this.deps.swarm) {
+          const lastText = turnState.textBlocks.map(b => b.text).join('\n').slice(0, 200)
+          yield { type: 'swarm_idle', summary: lastText || 'Teammate completed task' }
+          yield { type: 'done', reason: 'idle' as DoneReason, usage: this.aggregateUsage(messages) }
           return
         }
 
@@ -292,9 +318,7 @@ export class AgentLoop {
   // --- Helper 方法 ---
 
   private collectTools(): CoreTool[] {
-    // 从 deps 获取工具列表 — 当前简化为空列表
-    // 实际实现中由 ToolDep 提供
-    return []
+    return this.deps.tools.list()
   }
 
   private createUserMessage(

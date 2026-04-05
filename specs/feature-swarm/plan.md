@@ -168,7 +168,20 @@ Swarm 功能允许 Claude Code 创建多个 Agent 组成的团队，以并行或
 - **风险**: 大规模 import 重构可能引入回归；与 `src/` 内部模块（`Task`、`AppState`、`Tool`）的循环依赖需要解决
 - **建议**: **暂不迁移**。当前代码虽分散但功能完整，迁移的 ROI 不高。可以在未来代码重构时自然收敛。
 
-#### 4.4 统一 `SwarmOrchestrator` 入口
+#### 4.4 agent-core 集成（详见第八节）
+- **状态**: 待实施
+- **工作量**: 8-12 天
+- **具体工作**:
+  - 扩展 `ToolDep` 增加 `list()` 方法（修复 `collectTools()` 返回空数组的问题）
+  - 添加 `SwarmDep` 可选接口（邮箱轮询、任务认领、队友身份）
+  - 扩展 `DoneReason`（`idle`/`shutdown`）和 `AgentEvent`（swarm 事件）
+  - 在 `AgentLoop` 添加邮箱轮询步骤
+  - 在 `src/utils/swarm/adapters/` 创建 9 个适配器桥接现有基础设施
+  - 迁移 `inProcessRunner.ts` 使用 `AgentCore` 替代 `runAgent()`
+- **依赖**: P0.1（需要测试覆盖保障重构）
+- **风险**: 中等 — 需要确保权限桥接、mailbox 轮询、idle notification 行为与现有实现一致
+
+#### 4.5 统一 `SwarmOrchestrator` 入口（原 4.4）
 - **状态**: 未实现（功能分散在多个模块中）
 - **工作量**: 3-4 天
 - **具体工作**:
@@ -183,7 +196,7 @@ Swarm 功能允许 Claude Code 创建多个 Agent 组成的团队，以并行或
 
 ### P2: 功能增强
 
-#### 4.5 改进错误处理与恢复
+#### 4.6 改进错误处理与恢复
 - **状态**: 部分实现（有基础的 logForDebugging 和 try/catch）
 - **工作量**: 2-3 天
 - **具体工作**:
@@ -194,7 +207,7 @@ Swarm 功能允许 Claude Code 创建多个 Agent 组成的团队，以并行或
 - **依赖**: P0
 - **风险**: 低
 
-#### 4.6 性能优化
+#### 4.7 性能优化
 - **状态**: 部分实现（已有消息上限 `TEAMMATE_MESSAGES_UI_CAP = 50`、compaction）
 - **工作量**: 3-5 天
 - **具体工作**:
@@ -205,7 +218,7 @@ Swarm 功能允许 Claude Code 创建多个 Agent 组成的团队，以并行或
 - **依赖**: P0
 - **风险**: 中等——性能优化需要基准测试数据支撑
 
-#### 4.7 后端健壮性提升
+#### 4.8 后端健壮性提升
 - **状态**: 基本可用但有局限
 - **工作量**: 2-3 天
 - **具体工作**:
@@ -218,7 +231,7 @@ Swarm 功能允许 Claude Code 创建多个 Agent 组成的团队，以并行或
 
 ### P3: 扩展功能
 
-#### 4.8 Coordinator Mode / 工作流编排
+#### 4.9 Coordinator Mode / 工作流编排
 - **状态**: 部分实现（`src/components/tasks/src/coordinator/coordinatorMode.ts` 存在）
 - **工作量**: 5-8 天
 - **具体工作**:
@@ -228,7 +241,7 @@ Swarm 功能允许 Claude Code 创建多个 Agent 组成的团队，以并行或
 - **依赖**: P0, P1
 - **风险**: 高——需要设计决策和充分测试
 
-#### 4.9 远程 Agent 支持
+#### 4.10 远程 Agent 支持
 - **状态**: `RemoteAgentTask` 文件存在（1102 行）
 - **工作量**: 取决于远程基础设施
 - **具体工作**:
@@ -245,15 +258,16 @@ Swarm 功能允许 Claude Code 创建多个 Agent 组成的团队，以并行或
 ```
 P0.1 添加单元测试 ─────────────┐
 P0.2 补充集成测试 ← P0.1      │
-                                ├→ P1.3 统一 Orchestrator
-                                ├→ P1.4 考虑迁移 packages/swarm
+                                ├→ P1.4 agent-core 集成
+                                ├→ P1.5 统一 Orchestrator
+                                ├→ P1.3 考虑迁移 packages/swarm
                                 │
-                                ├→ P2.5 改进错误处理
-                                ├→ P2.6 性能优化
-                                ├→ P2.7 后端健壮性
+                                ├→ P2.6 改进错误处理
+                                ├→ P2.7 性能优化
+                                ├→ P2.8 后端健壮性
                                 │
-                                └→ P3.8 工作流编排
-                                   P3.9 远程 Agent 支持
+                                └→ P3.9 工作流编排
+                                   P3.10 远程 Agent 支持
 ```
 
 ---
@@ -283,17 +297,283 @@ P0.2 补充集成测试 ← P0.1      │
 2. 完成 P0.2 集成测试
 
 ### 中期（2-4 周）
-3. 完成 P1.4 统一 Orchestrator 入口（提高代码可维护性）
-4. 完成 P2.5 错误处理改进
+3. 完成 P1.4 agent-core 集成（详见第八节，统一队友执行架构）
+4. 完成 P1.5 统一 Orchestrator 入口（提高代码可维护性）
+5. 完成 P2.6 错误处理改进
 
 ### 长期
-5. 根据用户反馈决定是否迁移到 `packages/swarm/`
-6. 评估 P2.6 性能优化需求（需要实际使用数据）
-7. P3.8/P3.9 按需实现
+6. 根据用户反馈决定是否迁移到 `packages/swarm/`
+7. 评估 P2.7 性能优化需求（需要实际使用数据）
+8. P3.9/P3.10 按需实现
 
 ---
 
-## 八、关键文件索引
+## 八、agent-core 集成方案
+
+> 现有 swarm 代码绕过 `packages/agent/` 的 `AgentCore`，直接使用 `runAgent()` + `query()` 执行队友。
+> 本节规划如何让每个队友复用 `AgentCore` 实例，统一 agent 执行架构。
+
+### 8.1 当前差距分析
+
+| 维度 | agent-core 现状 | Swarm 需求 |
+|------|-----------------|-----------|
+| Agent 实例 | 单例模式，一次一个 run | 多实例并行，每个队友一个 `AgentCore` |
+| 通信 | 无 — 只有 input/output 事件流 | 邮箱系统（文件 + mailbox），peer-to-peer 消息 |
+| 权限 | 简单 `canUseTool()` 接口 | 桥接到 Leader UI / mailbox 转发 / classifier 自审批 |
+| 生命周期 | run → done | spawn → idle notification → shutdown request → terminate/kill |
+| 后端 | 无 | tmux / iTerm2 / in-process 三种后端 |
+| 压缩 | `CompactionDep` 已定义 | 队友需要独立压缩，带消息上限 (50 条) |
+| 工具集 | `collectTools()` 返回空数组 | 队友需要受限工具集（SendMessage, TaskCreate 等） |
+
+### 8.2 架构方案：复用 AgentCore 作为队友执行引擎
+
+核心思路：每个 in-process 队友创建一个独立的 `AgentCore` 实例，用不同的 `AgentDeps` 配置注入 swarm 特定行为。
+
+```
+Leader (主会话)
+  └── TeamCreateTool → 创建团队
+       └── InProcessBackend.spawn()
+            └── new AgentCore(swarmAgentDeps)  ← 每个队友一个实例
+                 └── AgentLoop.run()
+                      ├── ProviderDep: 共享 API client + 独立 model
+                      ├── ToolDep: 受限工具集 + swarm 工具 + list()
+                      ├── PermissionDep: 桥接到 Leader UI
+                      ├── CompactionDep: 独立压缩，带消息上限
+                      ├── ContextDep: 队友系统提示 + team context
+                      ├── HookDep: idle notification / mailbox polling
+                      ├── SessionDep: 独立 session ID
+                      └── SwarmDep: 邮箱轮询 + 消息注入 + 任务认领
+```
+
+### 8.3 需要对 agent-core 做的改动
+
+#### 改动 1: `ToolDep` 增加 `list()` 方法
+
+**文件**: `packages/agent/types/deps.ts`
+
+当前 `collectTools()` 返回空数组（`AgentLoop.ts:294`），是因为 `ToolDep` 没有列出工具的接口。
+
+```typescript
+interface ToolDep {
+  find(name: string): CoreTool | undefined
+  execute(tool: CoreTool, input: unknown, context: ToolExecContext): Promise<ToolResult>
+  /** 列出所有可用工具（用于构建 API 请求的 tools 参数） */  // ← 新增
+  list(): CoreTool[]
+}
+```
+
+#### 改动 2: 添加 `SwarmDep` 接口
+
+**文件**: `packages/agent/types/deps.ts`
+
+可选依赖，只有队友实例需要注入。
+
+```typescript
+/** 队友邮箱接口 */
+interface MailboxDep {
+  poll(): Promise<IncomingMessage[]>
+  markRead(index: number): Promise<void>
+  sendTo(peerId: string, message: OutgoingMessage): Promise<void>
+  broadcast(message: OutgoingMessage): Promise<void>
+}
+
+/** 队友任务认领接口 */
+interface TaskClaimingDep {
+  listAvailable(): Promise<Task[]>
+  claim(taskId: string): Promise<boolean>
+  update(taskId: string, status: string): Promise<void>
+}
+
+/** Swarm 专用依赖 — 可选，只有队友实例注入 */
+interface SwarmDep {
+  /** 队友身份信息 */
+  identity: TeammateIdentity
+  /** 邮箱系统 */
+  mailbox: MailboxDep
+  /** 任务认领 */
+  taskClaiming: TaskClaimingDep
+}
+```
+
+#### 改动 3: `AgentDeps` 扩展
+
+**文件**: `packages/agent/types/deps.ts`
+
+采用可选字段方式，不破坏现有消费者。
+
+```typescript
+interface AgentDeps {
+  // ... 现有 8 个
+  /** Swarm 专用依赖（可选，队友实例需要） */
+  swarm?: SwarmDep
+}
+```
+
+#### 改动 4: `DoneReason` 增加队友状态
+
+**文件**: `packages/agent/types/events.ts`
+
+```typescript
+type DoneReason =
+  | 'end_turn'
+  | 'max_turns'
+  | 'interrupted'
+  | 'error'
+  | 'stop_hook'
+  | 'budget'
+  | 'idle'       // ← 队友完成任务，发送 idle notification
+  | 'shutdown'   // ← Leader 请求关闭
+```
+
+#### 改动 5: `AgentEvent` 增加队友事件
+
+**文件**: `packages/agent/types/events.ts`
+
+```typescript
+interface SwarmMessageEvent {
+  type: 'swarm_message'
+  from: string
+  text: string
+  summary?: string
+}
+
+interface SwarmIdleEvent {
+  type: 'swarm_idle'
+  summary: string
+}
+
+interface SwarmShutdownEvent {
+  type: 'swarm_shutdown'
+  reason: string
+}
+
+type AgentEvent =
+  | ... // 现有
+  | SwarmMessageEvent
+  | SwarmIdleEvent
+  | SwarmShutdownEvent
+```
+
+#### 改动 6: `AgentLoop` 添加邮箱轮询步骤
+
+**文件**: `packages/agent/core/AgentLoop.ts`
+
+在主循环 while 顶部、调用 LLM 之前，检查收件箱：
+
+```typescript
+// Step 0: 邮箱轮询（仅队友实例）
+if (this.deps.swarm) {
+  const inboxMessages = await this.deps.swarm.mailbox.poll()
+  if (inboxMessages.length > 0) {
+    for (const msg of inboxMessages) {
+      yield { type: 'swarm_message', from: msg.from, text: msg.text }
+      messages = [...messages, this.createUserMessage(msg.text)]
+    }
+  }
+}
+```
+
+在 `end_turn` 之后，发送 idle notification 并以 `'idle'` 原因结束：
+
+```typescript
+if (this.deps.swarm && stopReason !== 'tool_use') {
+  yield { type: 'swarm_idle', summary: '...' }
+  yield { type: 'done', reason: 'idle' }
+  return
+}
+```
+
+#### 改动 7: `collectTools()` 使用 `deps.tools.list()`
+
+**文件**: `packages/agent/core/AgentLoop.ts`
+
+```typescript
+private collectTools(): CoreTool[] {
+  return this.deps.tools.list()  // 替换当前的 return []
+}
+```
+
+#### 改动 8: 导出新类型
+
+**文件**: `packages/agent/index.ts`
+
+```typescript
+export type {
+  SwarmDep,
+  MailboxDep,
+  TaskClaimingDep,
+  SwarmMessageEvent,
+  SwarmIdleEvent,
+  SwarmShutdownEvent,
+} from './types/deps.js'
+```
+
+### 8.4 需要在 `src/` 中创建的适配器
+
+将现有 swarm 基础设施桥接到 `AgentDeps` 接口：
+
+| 适配器 | 职责 | 桥接对象 |
+|--------|------|---------|
+| `src/utils/swarm/adapters/SwarmProviderAdapter.ts` | 包装共享 API client + 队友 model | → `ProviderDep` |
+| `src/utils/swarm/adapters/SwarmToolAdapter.ts` | 受限工具集 + `list()` | → `ToolDep` |
+| `src/utils/swarm/adapters/SwarmPermissionAdapter.ts` | 桥接 Leader UI / mailbox 转发 | → `PermissionDep` |
+| `src/utils/swarm/adapters/SwarmCompactionAdapter.ts` | 独立压缩 + 消息上限 | → `CompactionDep` |
+| `src/utils/swarm/adapters/SwarmContextAdapter.ts` | 队友系统提示 + team context | → `ContextDep` |
+| `src/utils/swarm/adapters/SwarmHookAdapter.ts` | idle notification / mailbox polling | → `HookDep` |
+| `src/utils/swarm/adapters/SwarmMailboxAdapter.ts` | 文件邮箱系统 | → `MailboxDep` |
+| `src/utils/swarm/adapters/SwarmTaskClaimingAdapter.ts` | 任务认领 | → `TaskClaimingDep` |
+| `src/utils/swarm/adapters/buildSwarmDeps.ts` | 聚合上述适配器 | → `AgentDeps` |
+
+### 8.5 `inProcessRunner.ts` 的迁移路径
+
+**当前**:
+```
+inProcessRunner.ts → runAgent() (src/tools/AgentTool/runAgent.ts)
+                   → query() (src/query.ts)
+                   → 直接调用 Anthropic API
+```
+
+**目标**:
+```
+inProcessRunner.ts → buildSwarmDeps() 构造 AgentDeps
+                   → new AgentCore(deps)
+                   → agentCore.run({ prompt, ... })
+                   → 处理 AgentEvent 流（转发到 AppState / UI）
+```
+
+迁移时需要保留的关键功能：
+- `createInProcessCanUseTool()` — 权限桥接逻辑（改为适配 `PermissionDep`）
+- mailbox 轮询 + shutdown 检测（改为 `SwarmDep.mailbox`）
+- 进度追踪 + AppState 更新（从 `AgentEvent` 流中提取）
+- AbortController 联动（通过 `AgentInput.abortSignal`）
+
+### 8.6 实施步骤与优先级
+
+| 步骤 | 改动位置 | 优先级 | 工作量 |
+|------|---------|--------|--------|
+| 1 | `packages/agent/types/deps.ts` — `ToolDep.list()` | **P0** | 0.5 天 |
+| 2 | `packages/agent/core/AgentLoop.ts` — `collectTools()` 修复 | **P0** | 0.5 天 |
+| 3 | `packages/agent/types/deps.ts` — `SwarmDep` 接口 | P1 | 1 天 |
+| 4 | `packages/agent/types/events.ts` — `DoneReason` + `AgentEvent` 扩展 | P1 | 0.5 天 |
+| 5 | `packages/agent/core/AgentLoop.ts` — 邮箱轮询 + idle notification | P1 | 1 天 |
+| 6 | `packages/agent/index.ts` — 导出新类型 | P1 | 0.5 天 |
+| 7 | `src/utils/swarm/adapters/` — 9 个适配器 | P1 | 3-4 天 |
+| 8 | `src/utils/swarm/inProcessRunner.ts` — 迁移到 `AgentCore` | P2 | 2-3 天 |
+| 9 | 测试：适配器单元测试 + 集成测试 | P2 | 2-3 天 |
+
+### 8.7 不需要改动的部分
+
+- **后端系统** (`backends/TmuxBackend`, `ITermBackend`, `InProcessBackend`) — 管理进程/终端
+- **团队文件管理** (`teamHelpers.ts`) — 管理 `.claude/teams/` 目录
+- **权限同步** (`permissionSync.ts`) — 只需适配 `PermissionDep` 接口
+- **邮箱系统** (`teammateMailbox.ts`) — 只需适配 `MailboxDep` 接口
+- **UI 组件** (`TeamsDialog.tsx` 等) — 完全不变
+- **工具** (`TeamCreateTool`, `SendMessageTool` 等) — 保持不变
+- **Worktree 管理** (`worktree.ts`) — 保持不变
+
+---
+
+## 九、关键文件索引
 
 ### 核心代码（已实现）
 - `/Users/konghayao/code/ai/claude-code/src/utils/swarm/inProcessRunner.ts` — 队友执行循环（1553 行）
@@ -330,6 +610,13 @@ P0.2 补充集成测试 ← P0.1      │
 - `/Users/konghayao/code/ai/claude-code/src/hooks/useSwarmPermissionPoller.ts`
 - `/Users/konghayao/code/ai/claude-code/src/hooks/useSwarmInitialization.ts`
 - `/Users/konghayao/code/ai/claude-code/src/hooks/useInboxPoller.ts`
+
+### agent-core（需改动）
+- `/Users/konghayao/code/ai/claude-code/packages/agent/types/deps.ts` — `ToolDep.list()` + `SwarmDep` 接口
+- `/Users/konghayao/code/ai/claude-code/packages/agent/types/events.ts` — `DoneReason` + `AgentEvent` 扩展
+- `/Users/konghayao/code/ai/claude-code/packages/agent/core/AgentLoop.ts` — 邮箱轮询 + `collectTools()` 修复
+- `/Users/konghayao/code/ai/claude-code/packages/agent/core/AgentCore.ts` — 无需改动
+- `/Users/konghayao/code/ai/claude-code/packages/agent/index.ts` — 导出新类型
 
 ### 功能开关
 - `/Users/konghayao/code/ai/claude-code/src/utils/agentSwarmsEnabled.ts` — 总开关（三层门控）

@@ -28,6 +28,8 @@ import {
   getTimeBasedMCConfig,
   type TimeBasedMCConfig,
 } from './timeBasedMCConfig.js'
+import { collectCompactableToolIds } from '../../../packages/agent/compaction/microCompactUtils.js'
+import { isMainThreadSource } from './contextWindowManager.js'
 
 // Inline from utils/toolResultStorage.ts — importing that file pulls in
 // sessionStorage → utils/messages → services/api/errors, completing a
@@ -222,23 +224,8 @@ export type MicrocompactResult = {
 /**
  * Walk messages and collect tool_use IDs whose tool name is in
  * COMPACTABLE_TOOLS, in encounter order. Shared by both microcompact paths.
+ * Delegates to the pure implementation in packages/agent/compaction/microCompactUtils.ts.
  */
-function collectCompactableToolIds(messages: Message[]): string[] {
-  const ids: string[] = []
-  for (const message of messages) {
-    if (
-      message.type === 'assistant' &&
-      Array.isArray(message.message.content)
-    ) {
-      for (const block of message.message.content) {
-        if (block.type === 'tool_use' && COMPACTABLE_TOOLS.has(block.name)) {
-          ids.push(block.id)
-        }
-      }
-    }
-  }
-  return ids
-}
 
 // Prefix-match because promptCategory.ts sets the querySource to
 // 'repl_main_thread:outputStyle:<style>' when a non-default output style
@@ -246,9 +233,7 @@ function collectCompactableToolIds(messages: Message[]): string[] {
 // query.ts:350/1451 use the same startsWith pattern; the pre-existing
 // cached-MC `=== 'repl_main_thread'` check was a latent bug — users with a
 // non-default output style were silently excluded from cached MC.
-function isMainThreadSource(querySource: QuerySource | undefined): boolean {
-  return !querySource || querySource.startsWith('repl_main_thread')
-}
+// Re-exported from contextWindowManager bridge (which sources from packages/agent).
 
 export async function microcompactMessages(
   messages: Message[],
@@ -310,7 +295,7 @@ async function cachedMicrocompactPath(
   const state = ensureCachedMCState()
   const config = mod.getCachedMCConfig()
 
-  const compactableToolIds = new Set(collectCompactableToolIds(messages))
+  const compactableToolIds = new Set(collectCompactableToolIds(messages, COMPACTABLE_TOOLS))
   // Second pass: register tool results grouped by user message
   for (const message of messages) {
     if (message.type === 'user' && Array.isArray(message.message.content)) {
@@ -453,7 +438,7 @@ function maybeTimeBasedMicrocompact(
   }
   const { gapMinutes, config } = trigger
 
-  const compactableIds = collectCompactableToolIds(messages)
+  const compactableIds = collectCompactableToolIds(messages, COMPACTABLE_TOOLS)
 
   // Floor at 1: slice(-0) returns the full array (paradoxically keeps
   // everything), and clearing ALL results leaves the model with zero working

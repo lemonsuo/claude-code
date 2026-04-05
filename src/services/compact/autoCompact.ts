@@ -1,11 +1,9 @@
 import { feature } from 'bun:bundle'
 import { markPostCompaction } from 'src/bootstrap/state.js'
-import { getSdkBetas } from '../../bootstrap/state.js'
 import type { QuerySource } from '../../constants/querySource.js'
 import type { ToolUseContext } from '../../Tool.js'
 import type { Message } from '../../types/message.js'
 import { getGlobalConfig } from '@anthropic/config'
-import { getContextWindowForModel } from '../../utils/context.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { hasExactErrorMessage } from '../../utils/errors.js'
@@ -13,7 +11,6 @@ import type { CacheSafeParams } from '../../utils/forkedAgent.js'
 import { logError } from '../../utils/log.js'
 import { tokenCountWithEstimation } from '../../utils/tokens.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../analytics/growthbook.js'
-import { getMaxOutputTokensForModel } from '../api/claude.js'
 import { notifyCompaction } from '../api/promptCacheBreakDetection.js'
 import { setLastSummarizedMessageId } from '../SessionMemory/sessionMemoryUtils.js'
 import {
@@ -22,126 +19,36 @@ import {
   ERROR_MESSAGE_USER_ABORT,
   type RecompactionInfo,
 } from './compact.js'
+import {
+  getEffectiveContextWindowSize,
+  getAutoCompactThreshold,
+  calculateTokenWarningState,
+  AUTOCOMPACT_BUFFER_TOKENS,
+  WARNING_THRESHOLD_BUFFER_TOKENS,
+  ERROR_THRESHOLD_BUFFER_TOKENS,
+  MANUAL_COMPACT_BUFFER_TOKENS,
+  MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES,
+} from './contextWindowManager.js'
 import { runPostCompactCleanup } from './postCompactCleanup.js'
 import { trySessionMemoryCompaction } from './sessionMemoryCompact.js'
 
-// Reserve this many tokens for output during compaction
-// Based on p99.99 of compact summary output being 17,387 tokens.
-const MAX_OUTPUT_TOKENS_FOR_SUMMARY = 20_000
-
-// Returns the context window size minus the max output tokens for the model
-export function getEffectiveContextWindowSize(model: string): number {
-  const reservedTokensForSummary = Math.min(
-    getMaxOutputTokensForModel(model),
-    MAX_OUTPUT_TOKENS_FOR_SUMMARY,
-  )
-  let contextWindow = getContextWindowForModel(model, getSdkBetas())
-
-  const autoCompactWindow = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
-  if (autoCompactWindow) {
-    const parsed = parseInt(autoCompactWindow, 10)
-    if (!isNaN(parsed) && parsed > 0) {
-      contextWindow = Math.min(contextWindow, parsed)
-    }
-  }
-
-  return contextWindow - reservedTokensForSummary
-}
+// Re-export for backward compatibility (consumers import from ./autoCompact.js)
+export {
+  getEffectiveContextWindowSize,
+  getAutoCompactThreshold,
+  calculateTokenWarningState,
+  AUTOCOMPACT_BUFFER_TOKENS,
+  WARNING_THRESHOLD_BUFFER_TOKENS,
+  ERROR_THRESHOLD_BUFFER_TOKENS,
+  MANUAL_COMPACT_BUFFER_TOKENS,
+  MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES,
+} from './contextWindowManager.js'
 
 export type AutoCompactTrackingState = {
   compacted: boolean
   turnCounter: number
-  // Unique ID per turn
   turnId: string
-  // Consecutive autocompact failures. Reset on success.
-  // Used as a circuit breaker to stop retrying when the context is
-  // irrecoverably over the limit (e.g., prompt_too_long).
   consecutiveFailures?: number
-}
-
-export const AUTOCOMPACT_BUFFER_TOKENS = 13_000
-export const WARNING_THRESHOLD_BUFFER_TOKENS = 20_000
-export const ERROR_THRESHOLD_BUFFER_TOKENS = 20_000
-export const MANUAL_COMPACT_BUFFER_TOKENS = 3_000
-
-// Stop trying autocompact after this many consecutive failures.
-// BQ 2026-03-10: 1,279 sessions had 50+ consecutive failures (up to 3,272)
-// in a single session, wasting ~250K API calls/day globally.
-const MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3
-
-export function getAutoCompactThreshold(model: string): number {
-  const effectiveContextWindow = getEffectiveContextWindowSize(model)
-
-  const autocompactThreshold =
-    effectiveContextWindow - AUTOCOMPACT_BUFFER_TOKENS
-
-  // Override for easier testing of autocompact
-  const envPercent = process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
-  if (envPercent) {
-    const parsed = parseFloat(envPercent)
-    if (!isNaN(parsed) && parsed > 0 && parsed <= 100) {
-      const percentageThreshold = Math.floor(
-        effectiveContextWindow * (parsed / 100),
-      )
-      return Math.min(percentageThreshold, autocompactThreshold)
-    }
-  }
-
-  return autocompactThreshold
-}
-
-export function calculateTokenWarningState(
-  tokenUsage: number,
-  model: string,
-): {
-  percentLeft: number
-  isAboveWarningThreshold: boolean
-  isAboveErrorThreshold: boolean
-  isAboveAutoCompactThreshold: boolean
-  isAtBlockingLimit: boolean
-} {
-  const autoCompactThreshold = getAutoCompactThreshold(model)
-  const threshold = isAutoCompactEnabled()
-    ? autoCompactThreshold
-    : getEffectiveContextWindowSize(model)
-
-  const percentLeft = Math.max(
-    0,
-    Math.round(((threshold - tokenUsage) / threshold) * 100),
-  )
-
-  const warningThreshold = threshold - WARNING_THRESHOLD_BUFFER_TOKENS
-  const errorThreshold = threshold - ERROR_THRESHOLD_BUFFER_TOKENS
-
-  const isAboveWarningThreshold = tokenUsage >= warningThreshold
-  const isAboveErrorThreshold = tokenUsage >= errorThreshold
-
-  const isAboveAutoCompactThreshold =
-    isAutoCompactEnabled() && tokenUsage >= autoCompactThreshold
-
-  const actualContextWindow = getEffectiveContextWindowSize(model)
-  const defaultBlockingLimit =
-    actualContextWindow - MANUAL_COMPACT_BUFFER_TOKENS
-
-  // Allow override for testing
-  const blockingLimitOverride = process.env.CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE
-  const parsedOverride = blockingLimitOverride
-    ? parseInt(blockingLimitOverride, 10)
-    : NaN
-  const blockingLimit =
-    !isNaN(parsedOverride) && parsedOverride > 0
-      ? parsedOverride
-      : defaultBlockingLimit
-
-  const isAtBlockingLimit = tokenUsage >= blockingLimit
-
-  return {
-    percentLeft,
-    isAboveWarningThreshold,
-    isAboveErrorThreshold,
-    isAboveAutoCompactThreshold,
-    isAtBlockingLimit,
-  }
 }
 
 export function isAutoCompactEnabled(): boolean {

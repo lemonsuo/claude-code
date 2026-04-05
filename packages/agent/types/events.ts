@@ -13,6 +13,8 @@ export type DoneReason =
   | 'error' // 不可恢复错误
   | 'stop_hook' // stop hook 阻止继续
   | 'budget' // token 预算耗尽
+  | 'idle' // 队友完成任务，发送 idle notification
+  | 'shutdown' // Leader 请求关闭
 
 // --- AgentEvent 联合类型 ---
 
@@ -73,6 +75,32 @@ export interface DoneEvent {
   error?: unknown
 }
 
+// --- Swarm 事件类型 ---
+
+export interface SwarmMessageEvent {
+  type: 'swarm_message'
+  /** 发送者 ID */
+  from: string
+  /** 发送者名称 */
+  fromName?: string
+  /** 消息文本 */
+  text: string
+  /** 消息摘要 */
+  summary?: string
+}
+
+export interface SwarmIdleEvent {
+  type: 'swarm_idle'
+  /** 队友工作摘要 */
+  summary: string
+}
+
+export interface SwarmShutdownEvent {
+  type: 'swarm_shutdown'
+  /** 关闭原因 */
+  reason: string
+}
+
 export type AgentEvent =
   | MessageEvent
   | StreamEvent
@@ -83,3 +111,6 @@ export type AgentEvent =
   | CompactionEvent
   | RequestStartEvent
   | DoneEvent
+  | SwarmMessageEvent
+  | SwarmIdleEvent
+  | SwarmShutdownEvent

@@ -1,5 +1,8 @@
 /**
  * EXPERIMENT: Session memory compaction
+ *
+ * Bridge module: re-exports pure logic from packages/agent/compaction/sessionMemoryCalc.ts
+ * and adds src/-specific IO (config management, GrowthBook, analytics, session memory IO).
  */
 
 import type { AgentId } from '../../types/ids.js'
@@ -40,29 +43,22 @@ import {
 } from './compact.js'
 import { estimateMessageTokens } from './microCompact.js'
 import { getCompactUserSummaryMessage } from './prompt.js'
+import {
+  adjustIndexToPreserveAPIInvariants as _adjustIndex,
+  calculateMessagesToKeepIndex as _calculateIndex,
+  DEFAULT_SM_COMPACT_CONFIG as _DEFAULT_CONFIG,
+  hasTextBlocks as _hasTextBlocks,
+  type SMMessage,
+} from '../../../packages/agent/compaction/sessionMemoryCalc.js'
 
-/**
- * Configuration for session memory compaction thresholds
- */
-export type SessionMemoryCompactConfig = {
-  /** Minimum tokens to preserve after compaction */
-  minTokens: number
-  /** Minimum number of messages with text blocks to keep */
-  minTextBlockMessages: number
-  /** Maximum tokens to preserve after compaction (hard cap) */
-  maxTokens: number
-}
-
-// Default configuration values (exported for use in tests)
-export const DEFAULT_SM_COMPACT_CONFIG: SessionMemoryCompactConfig = {
-  minTokens: 10_000,
-  minTextBlockMessages: 5,
-  maxTokens: 40_000,
-}
+export type { SessionMemoryCompactConfig } from '../../../packages/agent/types/compaction.js'
+export { _DEFAULT_CONFIG as DEFAULT_SM_COMPACT_CONFIG }
+export { _hasTextBlocks as hasTextBlocks }
+export { _adjustIndex as adjustIndexToPreserveAPIInvariants }
 
 // Current configuration (starts with defaults)
 let smCompactConfig: SessionMemoryCompactConfig = {
-  ...DEFAULT_SM_COMPACT_CONFIG,
+  ..._DEFAULT_CONFIG,
 }
 
 // Track whether config has been initialized from remote
@@ -91,7 +87,7 @@ export function getSessionMemoryCompactConfig(): SessionMemoryCompactConfig {
  * Reset config state (useful for testing)
  */
 export function resetSessionMemoryCompactConfig(): void {
-  smCompactConfig = { ...DEFAULT_SM_COMPACT_CONFIG }
+  smCompactConfig = { ..._DEFAULT_CONFIG }
   configInitialized = false
 }
 
@@ -116,284 +112,40 @@ async function initSessionMemoryCompactConfig(): Promise<void> {
     minTokens:
       remoteConfig.minTokens && remoteConfig.minTokens > 0
         ? remoteConfig.minTokens
-        : DEFAULT_SM_COMPACT_CONFIG.minTokens,
+        : _DEFAULT_CONFIG.minTokens,
     minTextBlockMessages:
       remoteConfig.minTextBlockMessages && remoteConfig.minTextBlockMessages > 0
         ? remoteConfig.minTextBlockMessages
-        : DEFAULT_SM_COMPACT_CONFIG.minTextBlockMessages,
+        : _DEFAULT_CONFIG.minTextBlockMessages,
     maxTokens:
       remoteConfig.maxTokens && remoteConfig.maxTokens > 0
         ? remoteConfig.maxTokens
-        : DEFAULT_SM_COMPACT_CONFIG.maxTokens,
+        : _DEFAULT_CONFIG.maxTokens,
   }
   setSessionMemoryCompactConfig(config)
 }
 
 /**
- * Check if a message contains text blocks (text content for user/assistant interaction)
- */
-export function hasTextBlocks(message: Message): boolean {
-  if (message.type === 'assistant') {
-    const content = message.message.content
-    return Array.isArray(content) && content.some(block => block.type === 'text')
-  }
-  if (message.type === 'user') {
-    const content = message.message.content
-    if (typeof content === 'string') {
-      return content.length > 0
-    }
-    if (Array.isArray(content)) {
-      return content.some(block => block.type === 'text')
-    }
-  }
-  return false
-}
-
-/**
- * Check if a message contains tool_result blocks and return their tool_use_ids
- */
-function getToolResultIds(message: Message): string[] {
-  if (message.type !== 'user') {
-    return []
-  }
-  const content = message.message.content
-  if (!Array.isArray(content)) {
-    return []
-  }
-  const ids: string[] = []
-  for (const block of content) {
-    if (block.type === 'tool_result') {
-      ids.push(block.tool_use_id)
-    }
-  }
-  return ids
-}
-
-/**
- * Check if a message contains tool_use blocks with any of the given ids
- */
-function hasToolUseWithIds(message: Message, toolUseIds: Set<string>): boolean {
-  if (message.type !== 'assistant') {
-    return false
-  }
-  const content = message.message.content
-  if (!Array.isArray(content)) {
-    return false
-  }
-  return content.some(
-    block => block.type === 'tool_use' && toolUseIds.has(block.id),
-  )
-}
-
-/**
- * Adjust the start index to ensure we don't split tool_use/tool_result pairs
- * or thinking blocks that share the same message.id with kept assistant messages.
- *
- * If ANY message we're keeping contains tool_result blocks, we need to
- * include the preceding assistant message(s) that contain the matching tool_use blocks.
- *
- * Additionally, if ANY assistant message in the kept range has the same message.id
- * as a preceding assistant message (which may contain thinking blocks), we need to
- * include those messages so they can be properly merged by normalizeMessagesForAPI.
- *
- * This handles the case where streaming yields separate messages per content block
- * (thinking, tool_use, etc.) with the same message.id but different uuids. If the
- * startIndex lands on one of these streaming messages, we need to look at ALL kept
- * messages for tool_results, not just the first one.
- *
- * Example bug scenarios this fixes:
- *
- * Tool pair scenario:
- *   Session storage (before compaction):
- *     Index N:   assistant, message.id: X, content: [thinking]
- *     Index N+1: assistant, message.id: X, content: [tool_use: ORPHAN_ID]
- *     Index N+2: assistant, message.id: X, content: [tool_use: VALID_ID]
- *     Index N+3: user, content: [tool_result: ORPHAN_ID, tool_result: VALID_ID]
- *
- *   If startIndex = N+2:
- *     - Old code: checked only message N+2 for tool_results, found none, returned N+2
- *     - After slicing and normalizeMessagesForAPI merging by message.id:
- *       msg[1]: assistant with [tool_use: VALID_ID]  (ORPHAN tool_use was excluded!)
- *       msg[2]: user with [tool_result: ORPHAN_ID, tool_result: VALID_ID]
- *     - API error: orphan tool_result references non-existent tool_use
- *
- * Thinking block scenario:
- *   Session storage (before compaction):
- *     Index N:   assistant, message.id: X, content: [thinking]
- *     Index N+1: assistant, message.id: X, content: [tool_use: ID]
- *     Index N+2: user, content: [tool_result: ID]
- *
- *   If startIndex = N+1:
- *     - Without this fix: thinking block at N is excluded
- *     - After normalizeMessagesForAPI: thinking block is lost (no message to merge with)
- *
- *   Fixed code: detects that message N+1 has same message.id as N, adjusts to N.
- */
-export function adjustIndexToPreserveAPIInvariants(
-  messages: Message[],
-  startIndex: number,
-): number {
-  if (startIndex <= 0 || startIndex >= messages.length) {
-    return startIndex
-  }
-
-  let adjustedIndex = startIndex
-
-  // Step 1: Handle tool_use/tool_result pairs
-  // Collect tool_result IDs from ALL messages in the kept range
-  const allToolResultIds: string[] = []
-  for (let i = startIndex; i < messages.length; i++) {
-    allToolResultIds.push(...getToolResultIds(messages[i]!))
-  }
-
-  if (allToolResultIds.length > 0) {
-    // Collect tool_use IDs already in the kept range
-    const toolUseIdsInKeptRange = new Set<string>()
-    for (let i = adjustedIndex; i < messages.length; i++) {
-      const msg = messages[i]!
-      if (msg.type === 'assistant' && Array.isArray(msg.message.content)) {
-        for (const block of msg.message.content) {
-          if (block.type === 'tool_use') {
-            toolUseIdsInKeptRange.add(block.id)
-          }
-        }
-      }
-    }
-
-    // Only look for tool_uses that are NOT already in the kept range
-    const neededToolUseIds = new Set(
-      allToolResultIds.filter(id => !toolUseIdsInKeptRange.has(id)),
-    )
-
-    // Find the assistant message(s) with matching tool_use blocks
-    for (let i = adjustedIndex - 1; i >= 0 && neededToolUseIds.size > 0; i--) {
-      const message = messages[i]!
-      if (hasToolUseWithIds(message, neededToolUseIds)) {
-        adjustedIndex = i
-        // Remove found tool_use_ids from the set
-        if (
-          message.type === 'assistant' &&
-          Array.isArray(message.message.content)
-        ) {
-          for (const block of message.message.content) {
-            if (block.type === 'tool_use' && neededToolUseIds.has(block.id)) {
-              neededToolUseIds.delete(block.id)
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // Step 2: Handle thinking blocks that share message.id with kept assistant messages
-  // Collect all message.ids from assistant messages in the kept range
-  const messageIdsInKeptRange = new Set<string>()
-  for (let i = adjustedIndex; i < messages.length; i++) {
-    const msg = messages[i]!
-    if (msg.type === 'assistant' && msg.message.id) {
-      messageIdsInKeptRange.add(msg.message.id)
-    }
-  }
-
-  // Look backwards for assistant messages with the same message.id that are not in the kept range
-  // These may contain thinking blocks that need to be merged by normalizeMessagesForAPI
-  for (let i = adjustedIndex - 1; i >= 0; i--) {
-    const message = messages[i]!
-    if (
-      message.type === 'assistant' &&
-      message.message.id &&
-      messageIdsInKeptRange.has(message.message.id)
-    ) {
-      // This message has the same message.id as one in the kept range
-      // Include it so thinking blocks can be properly merged
-      adjustedIndex = i
-    }
-  }
-
-  return adjustedIndex
-}
-
-/**
- * Calculate the starting index for messages to keep after compaction.
- * Starts from lastSummarizedMessageId, then expands backwards to meet minimums:
- * - At least config.minTokens tokens
- * - At least config.minTextBlockMessages messages with text blocks
- * Stops expanding if config.maxTokens is reached.
- * Also ensures tool_use/tool_result pairs are not split.
+ * Bridge wrapper for calculateMessagesToKeepIndex that injects real deps.
+ * This wraps the pure function from the agent package with local deps
+ * (estimateMessageTokens, isCompactBoundaryMessage, config state).
+ * Exported for backward compatibility — callers use the 2-arg signature.
  */
 export function calculateMessagesToKeepIndex(
   messages: Message[],
   lastSummarizedIndex: number,
 ): number {
-  if (messages.length === 0) {
-    return 0
-  }
-
-  const config = getSessionMemoryCompactConfig()
-
-  // Start from the message after lastSummarizedIndex
-  // If lastSummarizedIndex is -1 (not found) or messages.length (no summarized id),
-  // we start with no messages kept
-  let startIndex =
-    lastSummarizedIndex >= 0 ? lastSummarizedIndex + 1 : messages.length
-
-  // Calculate current tokens and text-block message count from startIndex to end
-  let totalTokens = 0
-  let textBlockMessageCount = 0
-  for (let i = startIndex; i < messages.length; i++) {
-    const msg = messages[i]!
-    totalTokens += estimateMessageTokens([msg])
-    if (hasTextBlocks(msg)) {
-      textBlockMessageCount++
-    }
-  }
-
-  // Check if we already hit the max cap
-  if (totalTokens >= config.maxTokens) {
-    return adjustIndexToPreserveAPIInvariants(messages, startIndex)
-  }
-
-  // Check if we already meet both minimums
-  if (
-    totalTokens >= config.minTokens &&
-    textBlockMessageCount >= config.minTextBlockMessages
-  ) {
-    return adjustIndexToPreserveAPIInvariants(messages, startIndex)
-  }
-
-  // Expand backwards until we meet both minimums or hit max cap.
-  // Floor at the last boundary: the preserved-segment chain has a disk
-  // discontinuity there (att[0]→summary shortcut from dedup-skip), which
-  // would let the loader's tail→head walk bypass inner preserved messages
-  // and then prune them. Reactive compact already slices at the boundary
-  // via getMessagesAfterCompactBoundary; this is the same invariant.
-  const idx = messages.findLastIndex(m => isCompactBoundaryMessage(m))
-  const floor = idx === -1 ? 0 : idx + 1
-  for (let i = startIndex - 1; i >= floor; i--) {
-    const msg = messages[i]!
-    const msgTokens = estimateMessageTokens([msg])
-    totalTokens += msgTokens
-    if (hasTextBlocks(msg)) {
-      textBlockMessageCount++
-    }
-    startIndex = i
-
-    // Stop if we hit the max cap
-    if (totalTokens >= config.maxTokens) {
-      break
-    }
-
-    // Stop if we meet both minimums
-    if (
-      totalTokens >= config.minTokens &&
-      textBlockMessageCount >= config.minTextBlockMessages
-    ) {
-      break
-    }
-  }
-
-  // Adjust for tool pairs
-  return adjustIndexToPreserveAPIInvariants(messages, startIndex)
+  return _calculateIndex(
+    messages as SMMessage[],
+    lastSummarizedIndex,
+    getSessionMemoryCompactConfig(),
+    {
+      estimateMessageTokens: (msgs: SMMessage[]) =>
+        estimateMessageTokens(msgs as Message[]),
+      isCompactBoundaryMessage: (msg: SMMessage) =>
+        isCompactBoundaryMessage(msg as Message),
+    },
+  )
 }
 
 /**

@@ -21,6 +21,13 @@ export type {
   StopHookResult,
   CompactionResult,
   SystemPrompt,
+  SwarmDep,
+  MailboxDep,
+  TaskClaimingDep,
+  TeammateIdentity,
+  IncomingMailMessage,
+  OutgoingMailMessage,
+  ClaimableTask,
 } from './types/deps.js'
 
 export type {
@@ -35,6 +42,9 @@ export type {
   CompactionEvent,
   RequestStartEvent,
   DoneEvent,
+  SwarmMessageEvent,
+  SwarmIdleEvent,
+  SwarmShutdownEvent,
 } from './types/events.js'
 
 export type {
@@ -60,3 +70,43 @@ export type {
   PermissionContext,
   ToolInputJSONSchema,
 } from './types/tools.js'
+
+// --- Compaction Types ---
+export type {
+  CompactionResult as CompactionTypeResult,
+  CompactionTrigger,
+  CompactionContext,
+  TokenWarningState,
+  SnipCompactResult,
+  MicrocompactResult,
+  CachedMCConfig,
+  TimeBasedMCConfig,
+  ContextEditStrategy,
+  ContextManagementConfig,
+  PostCompactCleanupActions,
+  ToolNameConstants,
+  SessionMemoryCompactConfig,
+} from './types/compaction.js'
+
+export type {
+  CompactionDeps,
+  FeatureFlagDep,
+  ConfigDep,
+  ModelDep,
+  TokenDep,
+  AnalyticsDep,
+  ApiDep,
+  MessagesDep,
+  AttachmentsDep,
+  HooksDep,
+  StateDep,
+  SessionMemoryDep,
+  SessionStorageDep,
+  PlansDep,
+  SkillsDep,
+  ToolSearchDep,
+  ForkDep,
+  ActivityDep,
+  TranscriptDep,
+  ContextCleanupDep,
+} from './types/compaction-deps.js'

@@ -1,11 +1,18 @@
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { describe, expect, test, beforeEach, afterEach, mock } from "bun:test";
 import { getAPIProvider, isFirstPartyAnthropicBaseUrl } from "../providers";
+
+// Mock getInitialSettings to avoid reading local settings.json
+// which may have modelType: 'openai' in dev environments
+mock.module("@anthropic/config", () => ({
+  getInitialSettings: () => ({}),
+}));
 
 describe("getAPIProvider", () => {
   const envKeys = [
     "CLAUDE_CODE_USE_BEDROCK",
     "CLAUDE_CODE_USE_VERTEX",
     "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_OPENAI",
   ] as const;
   const savedEnv: Record<string, string | undefined> = {};
 
@@ -27,31 +34,37 @@ describe("getAPIProvider", () => {
     delete process.env.CLAUDE_CODE_USE_BEDROCK;
     delete process.env.CLAUDE_CODE_USE_VERTEX;
     delete process.env.CLAUDE_CODE_USE_FOUNDRY;
+    delete process.env.CLAUDE_CODE_USE_OPENAI;
     expect(getAPIProvider()).toBe("firstParty");
   });
 
   test('returns "bedrock" when CLAUDE_CODE_USE_BEDROCK is set', () => {
+    delete process.env.CLAUDE_CODE_USE_OPENAI;
     process.env.CLAUDE_CODE_USE_BEDROCK = "1";
     expect(getAPIProvider()).toBe("bedrock");
   });
 
   test('returns "vertex" when CLAUDE_CODE_USE_VERTEX is set', () => {
+    delete process.env.CLAUDE_CODE_USE_OPENAI;
     process.env.CLAUDE_CODE_USE_VERTEX = "1";
     expect(getAPIProvider()).toBe("vertex");
   });
 
   test('returns "foundry" when CLAUDE_CODE_USE_FOUNDRY is set', () => {
+    delete process.env.CLAUDE_CODE_USE_OPENAI;
     process.env.CLAUDE_CODE_USE_FOUNDRY = "1";
     expect(getAPIProvider()).toBe("foundry");
   });
 
   test("bedrock takes precedence over vertex", () => {
+    delete process.env.CLAUDE_CODE_USE_OPENAI;
     process.env.CLAUDE_CODE_USE_BEDROCK = "1";
     process.env.CLAUDE_CODE_USE_VERTEX = "1";
     expect(getAPIProvider()).toBe("bedrock");
   });
 
   test("bedrock wins when all three env vars are set", () => {
+    delete process.env.CLAUDE_CODE_USE_OPENAI;
     process.env.CLAUDE_CODE_USE_BEDROCK = "1";
     process.env.CLAUDE_CODE_USE_VERTEX = "1";
     process.env.CLAUDE_CODE_USE_FOUNDRY = "1";
@@ -59,16 +72,19 @@ describe("getAPIProvider", () => {
   });
 
   test('"true" is truthy', () => {
+    delete process.env.CLAUDE_CODE_USE_OPENAI;
     process.env.CLAUDE_CODE_USE_BEDROCK = "true";
     expect(getAPIProvider()).toBe("bedrock");
   });
 
   test('"0" is not truthy', () => {
+    delete process.env.CLAUDE_CODE_USE_OPENAI;
     process.env.CLAUDE_CODE_USE_BEDROCK = "0";
     expect(getAPIProvider()).toBe("firstParty");
   });
 
   test('empty string is not truthy', () => {
+    delete process.env.CLAUDE_CODE_USE_OPENAI;
     process.env.CLAUDE_CODE_USE_BEDROCK = "";
     expect(getAPIProvider()).toBe("firstParty");
   });
